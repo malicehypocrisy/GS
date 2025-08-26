@@ -20,6 +20,26 @@ double var(const VectorXd& mat, int df = 0)
   return sumSquared / (mat.size() - df); 
 }
 
+//自动识别有效应的SNP并估计其效应的大小
+VectorXd rdirichlet(const VectorXd& alpha) {
+  int k = alpha.size();
+  VectorXd theta(k);
+  double sum = 0.0;
+
+  //使用Gammma分布抽取
+  random_device rd;
+  mt19937 gen(rd());
+
+  for(int i = 0; i < k; i++) {
+    gamma_distribution<double> gamma(alpha[i], 1.0);//狄利克雷分布可以通过伽马分布生成
+    theta[i] = gamma(gen);
+    sum += theta[i];
+  }
+
+  theta /=sum;
+  return theta;
+}
+
  //贝叶斯回归主函数
 pair <MatrixXd, MatrixXd> bayesr(const MatrixXd& X, const VectorXd& y, int niter = 1000,
                                 const VectorXd& gamma= VectorXd::Zero(4),
@@ -55,6 +75,9 @@ pair <MatrixXd, MatrixXd> bayesr(const MatrixXd& X, const VectorXd& y, int niter
   for (int j = 0; j < m; j++) {
     xpx[j] = X.col(j).squaredNorm();
   }
+
+  // 存储MCMC结果
+  MatrixXd keptIter(niter, ndist + 5);  // pi, nnz, sigmaSq, h2, vare, varg
 
   //随机数生成器
   random_device rd;//真随机数生成器（依赖硬件与操作系统提供的随机源）
@@ -98,8 +121,64 @@ pair <MatrixXd, MatrixXd> bayesr(const MatrixXd& X, const VectorXd& y, int niter
         logDelta[k] = 0.5 * (log(invLhs[k]) - logSigmaSq[k] + betaHat[k] * rhs) + logPi[k];
       }
 
+      //计算概率
+      double maxLog = logDelta.maxCoeff();//返回向量中最大的数
+      VectorXd probDelta = (logDelta.array() - maxLog).exp();//计算e的幂
+      probDelta /= probDelta.sum();//向量归一化
 
+      //抽样选择分布
+      double u = uniform_real_distribution<double>(0.0,1.0)(gen);
+      int delta = 0;
+      double sumProb = 0.0;
+      for (; delta < ndist; delta++) {
+        sumProb += probDelta[delta];
+        if (sumProb >= u) break;//累计和sumProb大于等于随机数部分，此为选中的混合成分
+      }
+
+      nsnpDist[delta]++;
+
+      if (delta > 0) {
+        double newBeta = betaHat[delta] + sqrt(invLhs[delta])*normal(gen);
+        ycorr += X.col(j) * (oldSample - newBeta);
+        ghat += X.col(j) * newBeta;
+        ssq += newBeta * newBeta / gamma[delta];
+        beta[j] = newBeta;
+        nnz++;
+      } else {
+        if (oldSample != 0) {
+          ycorr += X.col(j) * oldSample;
+        }
+        beta[j] = 0;
+      }
     }
+
+    mcmc_beta.row(iter) = beta;
+
+    //抽取pi
+    pi = rdirichlet(nsnpDist.array() + 1.0);
+
+    //抽样snp效应方差
+    chisq_nnzub.param(chi_squared_distribution<double>::param_type(nnz + nub));//随机数复合自由度为nnz + nub的卡方分布 
+    sigmaSq = (ssq + nub * scalee) / chisq_nnue(gen);
+
+    //抽样残差方差
+    double ycorr_sq = ycorr.squaredNorm();
+    vare = (ycorr_sq + nue * scalee) / chisq_nnue(gen);
+
+    //计算遗传力
+    varg = var(ghat);
+    h2 = varg / (varg + vare);
+
+    //保存结果
+    for (int k =0; k < ndist; k++) {
+      keptIter(iter, k) = pi[k];
+    }
+    keptIter(iter, ndist) = nnz;
+    keptIter(iter, ndist + 1) = sigmaSq;
+    keptIter(iter, ndist + 2) = h2;
+    keptIter(iter, ndist + 3) = vare;
+    keptIter(iter, ndist + 4) = varg;
+
   }
 
 
