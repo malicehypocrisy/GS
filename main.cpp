@@ -32,16 +32,14 @@ std::vector<BayesrResult> run_bayesr_chains(
     return results;   
 }
 
-// 使用示例
 int main() {
-    // 假设以下是你的数据
     int n = 400;  // 样本量
-    int p = 1000;  // 变量数
+    int p = 100000;  // 变量数
     Eigen::MatrixXd X = Eigen::MatrixXd::Random(n, p);  // 随机生成X
     Eigen::VectorXd y = Eigen::VectorXd::Random(n);     // 随机生成y
     
     // 运行10条链
-    int num_chains = 40;
+    int num_chains = 4;
     int niter = 20000;  // 迭代次数
     auto all_results = run_bayesr_chains(X, y, num_chains, niter);
     return 0;

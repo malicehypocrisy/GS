@@ -78,9 +78,7 @@ BayesrResult bayesr(
     double vare = vary * (1 - h2);
 
     double gamma_pi_sum = (gamma.array() * pi.array()).sum();
-    double sigmaSq = (gamma_pi_sum > 1e-10) ? 
-                     varg / (m * gamma_pi_sum) : 
-                     varg / m; 
+    double sigmaSq = varg / (m * gamma_pi_sum);
 
     const int nub = 4; //SNP效应方差的先验的自由度
     const int nue = 4; //残差方差的先验自由度
@@ -120,8 +118,8 @@ BayesrResult bayesr(
         mu.fill(mu_scalar);  // 更新截距向量
         ycorr -= mu;         // 重新计算残差：ycorr = y - mu - 遗传效应
 
-        VectorXd invSigmaSq = 1.0 / (gamma.array() * sigmaSq + 1e-10); // 避免除零
-        VectorXd logSigmaSq = (gamma.array() * sigmaSq + 1e-10).log(); // 避免log(0)
+        VectorXd invSigmaSq = 1.0 / (gamma.array() * sigmaSq);
+        VectorXd logSigmaSq = (gamma.array() * sigmaSq ).log(); 
         VectorXd logPi = pi.array().log();
 
         VectorXd nsnpDist = VectorXd::Zero(ndist);//统计每个混合分布被选中SNP的数量 
@@ -132,7 +130,7 @@ BayesrResult bayesr(
         // 抽样SNP效应
         for (int j = 0; j < m; j++) {
             double old_beta = beta[j];
-            double rhs_beta = X.col(j).dot(ycorr) + xpx[j] * old_beta;
+            double rhs_beta = X.col(j).dot(ycorr) + xpx[j] * old_beta;//更新残差
             rhs_beta /= vare;
               
             VectorXd beta_hat(ndist);    // 各成分的后验均值
@@ -142,7 +140,8 @@ BayesrResult bayesr(
                 beta_var_inv[k] = xpx[j] / vare + invSigmaSq[k];
                 beta_hat[k] = rhs_beta / beta_var_inv[k]; 
               } 
-            // 计算每个成分的对数概率
+
+            // 混合分布抽样
             VectorXd log_delta(ndist);
             for (int k = 0; k < ndist; k++) {
                 if (k == 0) {
@@ -150,38 +149,36 @@ BayesrResult bayesr(
                   log_delta[k] = logPi[k];
                 } else {
                     // 完整的对数后验概率计算
-                    log_delta[k] = -0.5 * (logSigmaSq[k] + log(beta_var_inv[k]) + 
-                                beta_hat[k] * beta_hat[k] * beta_var_inv[k]) + 
-                                logPi[k];  
+                    log_delta[k] = 0.5 * (log(1 / beta_var_inv[k]) - logSigmaSq[k] + beta_hat[k] *  beta_hat[k] * beta_var_inv[k]) + logPi[k];                             
                   }
               }
-        //使用log-sum-exp技巧进行归一化
-        double log_sum = log_sum_exp(log_delta);
-        VectorXd prob_delta = (log_delta.array() - log_sum).exp();
+            //使用log-sum-exp技巧进行归一化
+            double log_sum = log_sum_exp(log_delta);
+            VectorXd prob_delta = (log_delta.array() - log_sum).exp();
 
-        //抽样选择分布
-        double u = uniform(gen);
-        int delta = 0;
-        double cum_prob = 0.0;
-        for (; delta < ndist - 1; delta++) {
-            cum_prob += prob_delta[delta];
-              if (u <= cum_prob) break;
-        }
-        nsnpDist[delta]++;
-
-        if (delta > 0) {
-          double new_beta = beta_hat[delta] + sqrt(1.0 / beta_var_inv[delta]) * normal(gen);
-          ycorr += X.col(j) * (old_beta - new_beta); 
-          ghat += X.col(j) * new_beta;
-          ssq += new_beta * new_beta / gamma[delta];
-          beta[j] = new_beta;
-          nnz++;
-        } else {
-          if (old_beta != 0) {
-            ycorr += X.col(j) * old_beta;
+            //抽样选择分布
+            double u = uniform(gen);
+            int delta = 0;
+            double cum_prob = 0.0;
+            for (; delta < ndist - 1; delta++) {
+                cum_prob += prob_delta[delta];
+                  if (u <= cum_prob) break;
           }
-          beta[j] = 0;
-        }
+          nsnpDist[delta]++;
+
+          if (delta > 0) {
+            double new_beta = beta_hat[delta] + sqrt(1.0 / beta_var_inv[delta]) * normal(gen);
+            ycorr += X.col(j) * (old_beta - new_beta); 
+            ghat += X.col(j) * new_beta;
+            ssq += new_beta * new_beta / gamma[delta];
+            beta[j] = new_beta;
+            nnz++;
+          } else {
+            if (old_beta != 0) {
+              ycorr += X.col(j) * old_beta;
+            }
+            beta[j] = 0;
+          }
       }
 
       //抽取pi
